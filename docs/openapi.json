@@ -1,0 +1,984 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Serverlesspresso API",
+    "description": "Real-time serverless coffee ordering powered by AWS Lambda Durable Executions",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://{apiId}.execute-api.{region}.amazonaws.com/prod",
+      "description": "Production",
+      "variables": {
+        "apiId": {
+          "default": "xxxxxxxxxx",
+          "description": "API Gateway ID"
+        },
+        "region": {
+          "default": "us-east-1",
+          "description": "AWS Region"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Orders",
+      "description": "Order lifecycle operations"
+    },
+    {
+      "name": "Barista",
+      "description": "Barista actions (accept, complete)"
+    },
+    {
+      "name": "Store",
+      "description": "Store configuration and status"
+    },
+    {
+      "name": "Execution",
+      "description": "Durable execution introspection"
+    }
+  ],
+  "paths": {
+    "/orders": {
+      "get": {
+        "tags": ["Orders"],
+        "summary": "Get orders with optional filtering",
+        "description": "Queries orders directly from DynamoDB. The index used depends on the parameters provided: eventId uses EventTimeIndex, status uses StatusIndex, and no params defaults to QUEUED on StatusIndex.",
+        "operationId": "listOrders",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "description": "Filter orders by event ID. Used when no status is provided.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "coffee-shop"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by order status. When provided, takes precedence over eventId.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["PENDING", "QUEUED", "ACCEPTED", "COMPLETED", "CANCELLED"],
+              "default": "QUEUED"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of orders to return.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of orders sorted by creation time (newest first)",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderListResponse"
+                },
+                "example": {
+                  "orders": [
+                    {
+                      "orderId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+                      "attendeeId": "attendee-456",
+                      "eventId": "coffee-shop",
+                      "status": "QUEUED",
+                      "createdAt": "2025-01-15T10:30:00Z",
+                      "updatedAt": "2025-01-15T10:30:05Z",
+                      "orderDetails": {
+                        "drinkType": "latte",
+                        "size": "medium"
+                      },
+                      "timestamps": {
+                        "placed": "2025-01-15T10:30:00Z"
+                      }
+                    }
+                  ],
+                  "count": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Orders"],
+        "summary": "Place a new coffee order",
+        "description": "Invokes the CoffeeOrders durable Lambda function asynchronously. The orderId is auto-generated from the API Gateway request ID. Returns 202 immediately; the durable execution runs in the background.",
+        "operationId": "placeOrder",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaceOrderRequest"
+              },
+              "example": {
+                "attendeeId": "attendee-456",
+                "eventId": "coffee-shop",
+                "orderDetails": {
+                  "drinkType": "latte",
+                  "size": "medium"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Order accepted for processing",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceOrderResponse"
+                },
+                "example": {
+                  "orderId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+                  "status": "PENDING",
+                  "message": "Order placed successfully"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "Invalid request body"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "options": {
+        "tags": ["Orders"],
+        "summary": "CORS preflight",
+        "operationId": "corsOrders",
+        "responses": {
+          "200": {
+            "description": "CORS preflight response",
+            "headers": {
+              "Access-Control-Allow-Headers": {
+                "schema": { "type": "string", "example": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token" }
+              },
+              "Access-Control-Allow-Methods": {
+                "schema": { "type": "string", "example": "GET,POST,PUT,DELETE,OPTIONS" }
+              },
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders/{orderId}/cancel": {
+      "post": {
+        "tags": ["Orders"],
+        "summary": "Cancel an order",
+        "description": "Publishes an ORDER_CANCEL_REQUEST event to EventBridge. The callback handler sends a CANCEL callback to whichever wait the durable execution is currently paused on.",
+        "operationId": "cancelOrder",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "description": "Order ID to cancel",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOrderRequest"
+              },
+              "example": {
+                "reason": "Customer changed mind",
+                "cancelledBy": "attendee"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cancellation request submitted",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Cancellation request submitted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders/count": {
+      "get": {
+        "tags": ["Orders"],
+        "summary": "Get completed order count for an attendee today",
+        "description": "Queries the count of COMPLETED orders for a specific attendee on the current day. Used by the frontend to show remaining order allowance.",
+        "operationId": "getOrderCount",
+        "parameters": [
+          {
+            "name": "attendeeId",
+            "in": "query",
+            "required": true,
+            "description": "Attendee identifier",
+            "schema": {
+              "type": "string",
+              "example": "attendee-456"
+            }
+          },
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "description": "Event identifier",
+            "schema": {
+              "type": "string",
+              "example": "coffee-shop"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order count",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderCountResponse"
+                },
+                "example": {
+                  "count": 2
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/barista/accept/{orderId}": {
+      "post": {
+        "tags": ["Barista"],
+        "summary": "Barista accepts an order",
+        "description": "Publishes a BARISTA_ACCEPT_ORDER event to EventBridge, which triggers the CallbackHandler to resolve the acceptance callback on the durable execution.",
+        "operationId": "acceptOrder",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "description": "Order ID to accept",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BaristaActionRequest"
+              },
+              "example": {
+                "baristaId": "barista-123"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Order accepted",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Order accepted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/barista/complete/{orderId}": {
+      "post": {
+        "tags": ["Barista"],
+        "summary": "Barista completes an order",
+        "description": "Publishes a BARISTA_COMPLETE_ORDER event to EventBridge, which triggers the CallbackHandler to resolve the completion callback on the durable execution.",
+        "operationId": "completeOrder",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "description": "Order ID to complete",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BaristaActionRequest"
+              },
+              "example": {
+                "baristaId": "barista-123"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Order completed",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Order completed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/status": {
+      "post": {
+        "tags": ["Store"],
+        "summary": "Update store open/closed status",
+        "description": "Publishes a STORE_STATUS_CHANGED event to EventBridge. The EventPublisher updates the config table and sends a real-time notification to the frontend via AppSync.",
+        "operationId": "updateStoreStatus",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreStatusRequest"
+              },
+              "example": {
+                "eventId": "coffee-shop",
+                "storeOpen": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Store status updated",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Store status updated"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config/{eventId}": {
+      "get": {
+        "tags": ["Store"],
+        "summary": "Get event configuration",
+        "description": "Reads the event configuration directly from the ConfigTable in DynamoDB (no Lambda involved).",
+        "operationId": "getEventConfig",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "description": "Event identifier",
+            "schema": {
+              "type": "string",
+              "example": "coffee-shop"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event configuration (or error if not found)",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "eventId": {
+                      "type": "string",
+                      "example": "coffee-shop"
+                    },
+                    "eventName": {
+                      "type": "string",
+                      "example": "Coffee Shop"
+                    },
+                    "storeOpen": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "maxOrdersPerAttendee": {
+                      "type": "integer",
+                      "example": 3
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Present instead of the other fields when the event is not found",
+                      "example": "Event configuration not found"
+                    }
+                  }
+                },
+                "examples": {
+                  "found": {
+                    "summary": "Configuration found",
+                    "value": {
+                      "eventId": "coffee-shop",
+                      "eventName": "Coffee Shop",
+                      "storeOpen": true,
+                      "maxOrdersPerAttendee": 3,
+                      "createdAt": "2025-01-01T00:00:00Z",
+                      "updatedAt": "2025-01-15T09:00:00Z"
+                    }
+                  },
+                  "notFound": {
+                    "summary": "Configuration not found",
+                    "value": {
+                      "error": "Event configuration not found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/execution/history": {
+      "get": {
+        "tags": ["Execution"],
+        "summary": "Get durable execution history",
+        "description": "Lambda proxy integration that fetches the durable execution history. Supports lookup by direct executionArn (path param) or by orderId (query param, searches all executions).",
+        "operationId": "getExecutionHistory",
+        "parameters": [
+          {
+            "name": "executionArn",
+            "in": "query",
+            "required": false,
+            "description": "Direct durable execution ARN. Must start with 'arn:aws:lambda:'.",
+            "schema": {
+              "type": "string",
+              "example": "arn:aws:lambda:us-east-1:123456789012:function:coffee-orders:exec-1"
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "required": false,
+            "description": "Order ID to look up. The function lists all executions and finds the one whose input matches this orderId.",
+            "schema": {
+              "type": "string",
+              "example": "d290f1ee-6c54-4b01-90e6-d701748f0851"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Execution history",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionHistoryResponse"
+                },
+                "example": {
+                  "executionArn": "arn:aws:lambda:us-east-1:123456789012:function:coffee-orders:exec-1",
+                  "history": [
+                    { "EventType": "ExecutionStarted", "Timestamp": "2025-01-15T10:30:00Z" },
+                    { "EventType": "StepSucceeded", "Timestamp": "2025-01-15T10:30:01Z" }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing parameters — provide either executionArn or orderId",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LambdaErrorResponse"
+                },
+                "example": {
+                  "message": "Missing required parameter: executionArn or orderId"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No execution found matching the orderId",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LambdaErrorResponse"
+                },
+                "example": {
+                  "message": "No execution found for orderId",
+                  "orderId": "abc-123"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lambda API call failed",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "schema": { "type": "string", "example": "*" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LambdaErrorResponse"
+                },
+                "example": {
+                  "message": "Service unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrderDetails": {
+        "type": "object",
+        "required": ["drinkType", "size"],
+        "properties": {
+          "drinkType": {
+            "type": "string",
+            "description": "Type of drink",
+            "example": "latte"
+          },
+          "size": {
+            "type": "string",
+            "description": "Drink size",
+            "enum": ["small", "medium", "large"],
+            "example": "medium"
+          }
+        }
+      },
+      "OrderTimestamps": {
+        "type": "object",
+        "properties": {
+          "placed": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the order was placed"
+          },
+          "queued": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the order entered the queue"
+          },
+          "accepted": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When a barista accepted the order"
+          },
+          "completed": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the order was completed"
+          },
+          "cancelled": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the order was cancelled"
+          }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique order identifier"
+          },
+          "attendeeId": {
+            "type": "string",
+            "description": "Attendee who placed the order"
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Event/shop identifier"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["PENDING", "QUEUED", "ACCEPTED", "COMPLETED", "CANCELLED"],
+            "description": "Current order status"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "orderDetails": {
+            "$ref": "#/components/schemas/OrderDetails"
+          },
+          "timestamps": {
+            "$ref": "#/components/schemas/OrderTimestamps"
+          }
+        }
+      },
+      "OrderListResponse": {
+        "type": "object",
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Order"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "description": "Number of orders returned"
+          }
+        }
+      },
+      "PlaceOrderRequest": {
+        "type": "object",
+        "required": ["attendeeId", "eventId", "orderDetails"],
+        "properties": {
+          "attendeeId": {
+            "type": "string",
+            "description": "Unique identifier for the attendee",
+            "example": "attendee-456"
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Event/shop identifier used for config lookup",
+            "example": "coffee-shop"
+          },
+          "orderDetails": {
+            "$ref": "#/components/schemas/OrderDetails"
+          }
+        }
+      },
+      "PlaceOrderResponse": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Auto-generated order ID (from API Gateway request ID)"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["PENDING"],
+            "description": "Initial order status"
+          },
+          "message": {
+            "type": "string",
+            "example": "Order placed successfully"
+          }
+        }
+      },
+      "BaristaActionRequest": {
+        "type": "object",
+        "required": ["baristaId"],
+        "properties": {
+          "baristaId": {
+            "type": "string",
+            "description": "Identifier of the barista performing the action",
+            "example": "barista-123"
+          }
+        }
+      },
+      "CancelOrderRequest": {
+        "type": "object",
+        "required": ["reason", "cancelledBy"],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Cancellation reason",
+            "example": "Customer changed mind"
+          },
+          "cancelledBy": {
+            "type": "string",
+            "description": "Who initiated the cancellation",
+            "enum": ["attendee", "barista", "system"],
+            "example": "attendee"
+          }
+        }
+      },
+      "StoreStatusRequest": {
+        "type": "object",
+        "required": ["eventId", "storeOpen"],
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "description": "Event/shop identifier",
+            "example": "coffee-shop"
+          },
+          "storeOpen": {
+            "type": "boolean",
+            "description": "true to open the store, false to close it",
+            "example": true
+          }
+        }
+      },
+      "EventConfig": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "example": "coffee-shop"
+          },
+          "eventName": {
+            "type": "string",
+            "example": "Coffee Shop"
+          },
+          "storeOpen": {
+            "type": "boolean",
+            "example": true
+          },
+          "maxOrdersPerAttendee": {
+            "type": "integer",
+            "example": 3
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConfigNotFoundResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Event configuration not found"
+          }
+        }
+      },
+      "OrderCountResponse": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Number of COMPLETED orders for the attendee today",
+            "example": 2
+          }
+        }
+      },
+      "ExecutionHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "executionArn": {
+            "type": "string",
+            "description": "Durable execution ARN"
+          },
+          "history": {
+            "type": "array",
+            "description": "List of execution history events",
+            "items": {
+              "type": "object",
+              "properties": {
+                "EventType": {
+                  "type": "string",
+                  "description": "Type of execution event",
+                  "example": "StepSucceeded"
+                },
+                "Timestamp": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        }
+      },
+      "SuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "INVALID_REQUEST"
+              },
+              "message": {
+                "type": "string",
+                "example": "Invalid request body"
+              }
+            }
+          }
+        }
+      },
+      "LambdaErrorResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string",
+            "description": "Included in 404 responses for orderId lookups"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+.kiro/
+.aws-sam/
+samconfig.toml
+node_modules/
+package-lock.json
+*.log
+*.js
+!frontend/*.js
+!frontend/**/*.config.js
+*.d.ts
+dist/
+.DS_Store
+.env
+env.json
+
+# Local durable execution state
+.durable-executions-local
+.durable-functions-local
+locals.json
